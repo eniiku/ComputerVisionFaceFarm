@@ -204,7 +204,7 @@ def main():
     # Save the model in TensorFlow's SavedModel format, which is recommended for production deployment.
     # This format saves the model's architecture, weights, and training configuration.
     MODEL_SAVE_PATH = 'sheep_pain_detection_model'
-    model.save(MODEL_SAVE_PATH)
+    model.export(MODEL_SAVE_PATH)
     logger.info(f"\nFinal trained model saved to: {MODEL_SAVE_PATH}")
 
     logger.info("Sheep Pain Detection Model Training script completed successfully.")
