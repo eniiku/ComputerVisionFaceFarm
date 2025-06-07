@@ -1,0 +1,95 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. */
+
+@layer base {
+  :root {
+    --background: 15 23 42; /* slate-900 */
+    --foreground: 248 250 252; /* slate-50 */
+
+    --card: 0 0% 5%; /* Very dark for cards */
+    --card-foreground: 248 250 252;
+
+    --popover: 0 0% 5%;
+    --popover-foreground: 248 250 252;
+
+    --primary: 139 92 246; /* purple-500 */
+    --primary-foreground: 248 250 252;
+
+    --secondary: 71 85 105; /* slate-600 */
+    --secondary-foreground: 248 250 252;
+
+    --muted: 51 65 85; /* slate-700 */
+    --muted-foreground: 148 163 184; /* slate-400 */
+
+    --accent: 139 92 246; /* purple-500 */
+    --accent-foreground: 248 250 252;
+
+    --destructive: 239 68 68; /* red-500 */
+    --destructive-foreground: 248 250 252;
+
+    --border: 139 92 246; /* purple-500 with opacity */
+    --input: 51 65 85; /* slate-700 */
+    --ring: 139 92 246; /* purple-500 */
+
+    --radius: 0.75rem;
+
+    --sidebar-background: 15 23 42;
+    --sidebar-foreground: 248 250 252;
+    --sidebar-primary: 139 92 246;
+    --sidebar-primary-foreground: 248 250 252;
+    --sidebar-accent: 51 65 85;
+    --sidebar-accent-foreground: 248 250 252;
+    --sidebar-border: 139 92 246;
+    --sidebar-ring: 139 92 246;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: system-ui, -apple-system, sans-serif;
+    overscroll-behavior: none;
+  }
+
+  /* PWA specific styles */
+  @media (display-mode: standalone) {
+    body {
+      user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+    }
+  }
+
+  /* Mobile optimizations */
+  @media (max-width: 768px) {
+    html {
+      font-size: 16px;
+    }
+  }
+}
+
+/* Custom scrollbar for dark theme */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgb(15 23 42);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgb(139 92 246);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(124 58 237);
+}
