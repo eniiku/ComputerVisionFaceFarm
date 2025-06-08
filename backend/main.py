@@ -103,7 +103,9 @@ async def predict_pain(file: UploadFile = File(...)):
         # a single tensor, but it's safer to check the structure.
         # Assuming the output is a single tensor representing probability.
         # If it returns a dictionary like {'output_0': tensor}, you might need predictions['output_0'].numpy()[0][0]
-        pain_probability = float(predictions.numpy()[0][0]) # Extract value from TensorFlow tensor
+
+        print(predictions)
+        pain_probability = float(predictions['output_0'].numpy()[0][0]) # Extract value from TensorFlow tensor
 
         # Classify based on a threshold (e.g., 0.5 probability)
         if pain_probability >= 0.5:
