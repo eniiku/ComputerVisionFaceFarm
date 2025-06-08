@@ -1,5 +1,4 @@
-
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +13,41 @@ const Index = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<SheepAnalysisResult | null>(null);
   const [currentView, setCurrentView] = useState<"upload" | "results">("upload");
+  const [progress, setProgress] = useState(0);
+
+  // Dynamic progress bar effect
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    
+    if (isAnalyzing) {
+      setProgress(0);
+      interval = setInterval(() => {
+        setProgress((prev) => {
+          if (prev >= 95) return prev;
+          const increment = Math.random() * 15 + 5; // Random increment between 5-20
+          return Math.min(prev + increment, 95);
+        });
+      }, 800);
+    } else {
+      setProgress(0);
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isAnalyzing]);
+
+  // Function to translate raw prediction to user-friendly text
+  const translatePrediction = (rawPrediction: string): string => {
+    switch (rawPrediction) {
+      case "corpus_sheep_face_pain":
+        return "Pain Detected";
+      case "corpus_sheep_face_no_pain":
+        return "Healthy";
+      default:
+        return rawPrediction; // fallback to raw value if unknown
+    }
+  };
 
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -40,13 +74,19 @@ const Index = () => {
       const result = await sheepAnalysisApi.analyzeSheepImage(uploadedFile);
       console.log('Analysis result:', result);
       
-      setAnalysisResult(result);
+      // Complete the progress bar
+      setProgress(100);
       
-      const isPain = result.pain_probability > 0.5;
-      toast({
-        title: "Analysis Complete",
-        description: `Sheep ${isPain ? "shows signs of discomfort" : "appears comfortable"}`,
-      });
+      // Wait a moment before showing results
+      setTimeout(() => {
+        setAnalysisResult(result);
+        
+        const isPain = result.pain_probability > 0.5;
+        toast({
+          title: "Analysis Complete",
+          description: `Sheep ${isPain ? "shows signs of discomfort" : "appears healthy"}`,
+        });
+      }, 500);
     } catch (error) {
       console.error('Analysis failed:', error);
       toast({
@@ -64,6 +104,7 @@ const Index = () => {
     setCurrentView("upload");
     setAnalysisResult(null);
     setIsAnalyzing(false);
+    setProgress(0);
   };
 
   const isPainDetected = analysisResult ? analysisResult.pain_probability > 0.5 : false;
@@ -97,7 +138,7 @@ const Index = () => {
                 <h1 className="text-xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
                   FaceFarm
                 </h1>
-                <p className="text-xs text-purple-300">AI Sheep Welfare Monitor</p>
+                <p className="text-xs text-purple-300">AI Sheep Health Monitor</p>
               </div>
             </div>
 
@@ -113,7 +154,7 @@ const Index = () => {
           <Card className="bg-black/40 backdrop-blur-xl border-purple-500/30 shadow-2xl">
             <CardContent className="p-6">
               <div className="text-center mb-6">
-                <h2 className="text-2xl font-bold text-white mb-2">Sheep Welfare Analysis</h2>
+                <h2 className="text-2xl font-bold text-white mb-2">Sheep Health Analysis</h2>
                 <p className="text-purple-300">Upload a sheep image to detect signs of pain or discomfort</p>
               </div>
 
@@ -171,7 +212,7 @@ const Index = () => {
                     size="lg"
                   >
                     <Brain className="h-5 w-5 mr-3" />
-                    Analyze Sheep Welfare
+                    Analyze Sheep Health
                   </Button>
                 )}
               </div>
@@ -184,32 +225,41 @@ const Index = () => {
               <div className="text-center mb-6">
                 <h3 className="text-xl font-bold text-white flex items-center justify-center space-x-2">
                   <Brain className="h-5 w-5 text-purple-400" />
-                  <span>Welfare Analysis Results</span>
+                  <span>Health Analysis Results</span>
                 </h3>
               </div>
 
               {isAnalyzing ? (
                 <div className="space-y-6">
                   <div className="text-center">
-                    <div className="relative mx-auto w-16 h-16 mb-4">
-                      <Brain className="h-16 w-16 text-purple-400 animate-pulse" />
+                    <div className="relative mx-auto w-20 h-20 mb-6">
+                      <Brain className="h-20 w-20 text-purple-400 animate-pulse" />
                       <div className="absolute inset-0 rounded-full border-2 border-purple-400 border-t-transparent animate-spin"></div>
                     </div>
-                    <p className="text-purple-300 font-medium">AI is analyzing sheep facial expressions...</p>
+                    <p className="text-purple-300 font-medium text-lg mb-2">AI is analyzing sheep facial expressions...</p>
+                    <p className="text-purple-400 text-sm">Processing health indicators and pain patterns</p>
                   </div>
                   
-                  <div className="space-y-3">
+                  <div className="space-y-4">
                     <div className="flex justify-between text-sm">
-                      <span className="text-purple-300">Progress</span>
-                      <span className="text-purple-300">Processing...</span>
+                      <span className="text-purple-300">Analysis Progress</span>
+                      <span className="text-purple-300 font-medium">{Math.round(progress)}%</span>
                     </div>
-                    <Progress value={66} className="w-full h-2 bg-purple-900/50" />
+                    <Progress 
+                      value={progress} 
+                      className="w-full h-3 bg-purple-900/50"
+                    />
                   </div>
                   
-                  <div className="bg-purple-900/30 rounded-xl p-4 text-center">
-                    <p className="text-sm text-purple-300">
+                  <div className="bg-gradient-to-r from-purple-900/30 to-pink-900/30 rounded-xl p-4 text-center border border-purple-500/20">
+                    <p className="text-sm text-purple-300 mb-2">
                       Analyzing facial action units and pain indicators
                     </p>
+                    <div className="flex justify-center space-x-2">
+                      <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce"></div>
+                      <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                      <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                    </div>
                   </div>
                 </div>
               ) : analysisResult ? (
@@ -223,7 +273,7 @@ const Index = () => {
                         </div>
                         <div className="space-y-2">
                           <Badge className="bg-gradient-to-r from-red-600 to-red-500 text-white text-lg px-6 py-2 rounded-full">
-                            {analysisResult.prediction}
+                            {translatePrediction(analysisResult.prediction)}
                           </Badge>
                           <p className="text-red-300 text-sm">
                             The sheep shows facial indicators consistent with discomfort or pain
@@ -238,7 +288,7 @@ const Index = () => {
                         </div>
                         <div className="space-y-2">
                           <Badge className="bg-gradient-to-r from-green-600 to-green-500 text-white text-lg px-6 py-2 rounded-full">
-                            {analysisResult.prediction}
+                            {translatePrediction(analysisResult.prediction)}
                           </Badge>
                           <p className="text-green-300 text-sm">
                             The sheep displays normal facial expressions with no signs of distress
