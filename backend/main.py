@@ -37,6 +37,15 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  #NOTE: Configure this properly in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # --- Health Check Endpoint ---
 @app.get("/health", summary="Health Check", response_model=dict)
 async def health_check():
