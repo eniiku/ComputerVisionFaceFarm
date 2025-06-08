@@ -9,7 +9,8 @@ from sklearn.metrics import (
     precision_recall_curve,
     average_precision_score
 )
-import tensorflow as tf
+# No direct TensorFlow import needed if functions receive numpy arrays/models
+# import tensorflow as tf # Keep if you plan to load model directly inside this file
 
 # --- Configuration for plots ---
 FONT_SIZE = 12
@@ -22,21 +23,26 @@ DPI = 100 # Adjust for higher resolution images if needed
 def plot_training_history(history):
     """
     Plots the training and validation accuracy and loss over epochs.
+    Args:
+        history (keras.callbacks.History): The history object returned by model.fit().
     """
-    plt.style.use('seaborn-v0_8-darkgrid')
-    acc = history.history['accuracy']
-    val_acc = history.history['val_accuracy']
-    loss = history.history['loss']
-    val_loss = history.history['val_loss']
+    plt.style.use('seaborn-v0_8-darkgrid') # Use a nice style
 
-    epochs_range = range(len(acc))
+    # Ensure history object has the keys before accessing
+    acc = history.get('accuracy', [])
+    val_acc = history.get('val_accuracy', [])
+    loss = history.get('loss', [])
+    val_loss = history.get('val_loss', [])
 
-    plt.figure(figsize=(14, 6))
+    epochs_range = range(len(acc)) if acc else range(len(loss)) # Handle cases where acc might be empty
+
+    plt.figure(figsize=(14, 6), dpi=DPI)
 
     # Plot Accuracy
     plt.subplot(1, 2, 1)
-    plt.plot(epochs_range, acc, label='Training Accuracy', linewidth=LINE_WIDTH)
-    plt.plot(epochs_range, val_acc, label='Validation Accuracy', linewidth=LINE_WIDTH)
+    if acc and val_acc: # Only plot if data is available
+        plt.plot(epochs_range, acc, label='Training Accuracy', linewidth=LINE_WIDTH)
+        plt.plot(epochs_range, val_acc, label='Validation Accuracy', linewidth=LINE_WIDTH)
     plt.legend(loc='lower right', fontsize=FONT_SIZE)
     plt.title('Training and Validation Accuracy', fontsize=TITLE_FONT_SIZE)
     plt.xlabel('Epoch', fontsize=LABEL_FONT_SIZE)
@@ -47,8 +53,9 @@ def plot_training_history(history):
 
     # Plot Loss
     plt.subplot(1, 2, 2)
-    plt.plot(epochs_range, loss, label='Training Loss', linewidth=LINE_WIDTH)
-    plt.plot(epochs_range, val_loss, label='Validation Loss', linewidth=LINE_WIDTH)
+    if loss and val_loss: # Only plot if data is available
+        plt.plot(epochs_range, loss, label='Training Loss', linewidth=LINE_WIDTH)
+        plt.plot(epochs_range, val_loss, label='Validation Loss', linewidth=LINE_WIDTH)
     plt.legend(loc='upper right', fontsize=FONT_SIZE)
     plt.title('Training and Validation Loss', fontsize=TITLE_FONT_SIZE)
     plt.xlabel('Epoch', fontsize=LABEL_FONT_SIZE)
@@ -66,7 +73,7 @@ def plot_confusion_matrix(y_true, y_pred_classes, class_names):
     Plots the confusion matrix as a heatmap.
 
     Args:
-        y_true (array): True labels.
+        y_true (array): True labels (actual classes).
         y_pred_classes (array): Predicted class labels.
         class_names (list): List of class names (e.g., ['No Pain', 'Pain']).
     """
@@ -86,7 +93,12 @@ def plot_confusion_matrix(y_true, y_pred_classes, class_names):
 
 def print_classification_report(y_true, y_pred_classes, class_names):
     """
-    Prints the classification report.
+    Prints the classification report including precision, recall, f1-score, and support.
+
+    Args:
+        y_true (array): True labels.
+        y_pred_classes (array): Predicted class labels.
+        class_names (list): List of class names.
     """
     print("\n--- Classification Report ---")
     print(classification_report(y_true, y_pred_classes, target_names=class_names))
@@ -97,10 +109,14 @@ def plot_roc_curve(y_true, y_pred_probs, class_names):
     Plots the Receiver Operating Characteristic (ROC) curve.
 
     Args:
-        y_true (array): True labels (binary).
-        y_pred_probs (array): Predicted probabilities for the positive class.
-        class_names (list): List of class names, where class_names[1] is the positive class.
+        y_true (array): True labels (binary, typically 0 or 1).
+        y_pred_probs (array): Predicted probabilities for the positive class (e.g., 'Pain').
+        class_names (list): List of class names, where class_names[1] is assumed to be the positive class.
     """
+    if len(np.unique(y_true)) < 2:
+        print("ROC Curve cannot be plotted: Requires at least two classes in true labels.")
+        return
+
     fpr, tpr, thresholds = roc_curve(y_true, y_pred_probs)
     roc_auc = auc(fpr, tpr)
 
@@ -123,10 +139,14 @@ def plot_precision_recall_curve(y_true, y_pred_probs, class_names):
     Plots the Precision-Recall curve.
 
     Args:
-        y_true (array): True labels (binary).
-        y_pred_probs (array): Predicted probabilities for the positive class.
-        class_names (list): List of class names, where class_names[1] is the positive class.
+        y_true (array): True labels (binary, typically 0 or 1).
+        y_pred_probs (array): Predicted probabilities for the positive class (e.g., 'Pain').
+        class_names (list): List of class names, where class_names[1] is assumed to be the positive class.
     """
+    if len(np.unique(y_true)) < 2:
+        print("Precision-Recall Curve cannot be plotted: Requires at least two classes in true labels.")
+        return
+
     precision, recall, _ = precision_recall_curve(y_true, y_pred_probs)
     ap = average_precision_score(y_true, y_pred_probs)
 
