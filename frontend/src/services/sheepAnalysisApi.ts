@@ -1,5 +1,4 @@
-
-import { API_CONFIG } from '@/config/env';
+import { API_CONFIG } from "@/config/env";
 
 export interface SheepAnalysisResult {
   filename: string;
@@ -17,15 +16,17 @@ export class SheepAnalysisApi {
 
   async analyzeSheepImage(imageFile: File): Promise<SheepAnalysisResult> {
     const formData = new FormData();
-    formData.append('image', imageFile);
+    formData.append("file", imageFile);
 
     const response = await fetch(`${this.baseUrl}/predict`, {
-      method: 'POST',
+      method: "POST",
       body: formData,
     });
 
     if (!response.ok) {
-      throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+      throw new Error(
+        `API request failed: ${response.status} ${response.statusText}`
+      );
     }
 
     return await response.json();
