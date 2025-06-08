@@ -3,11 +3,11 @@ from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.applications import MobileNetV2
 from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout
 from tensorflow.keras.models import Model
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 import os
 import numpy as np
 import logging
-
+from sklearn.utils import class_weight # For class imbalance handling
 from evaluators import (
     plot_training_history,
     plot_confusion_matrix,
@@ -16,12 +16,13 @@ from evaluators import (
     plot_precision_recall_curve
 )
 
+# --- Configuration ---
 DATA_DIR = 'datasets/sheep_pain_dataset'
 IMG_HEIGHT = 224
 IMG_WIDTH = 224
 BATCH_SIZE = 32
 NUM_CLASSES = 2
-EPOCHS = 20
+EPOCHS = 30 # Increased epochs; EarlyStopping will manage actual training length
 
 # Define paths for your dataset
 train_dir = os.path.join(DATA_DIR, 'train')
@@ -33,14 +34,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 def main():
-    logger.info("Starting Sheep Pain Detection Model Training.")
+    logger.info("Starting Sheep Pain Detection Model Training (Accuracy Focus).")
 
     # --- Data Augmentation and Loading ---
-    # ImageDataGenerator is used to load images from directories and apply real-time
-    # data augmentation to the training set. This helps prevent overfitting and
-    # improves the model's ability to generalize to unseen data.
-    # For validation and test sets, only rescaling is applied.
-
     logger.info("Setting up ImageDataGenerators and loading data...")
 
     train_datagen = ImageDataGenerator(
@@ -51,10 +47,10 @@ def main():
         shear_range=0.2,
         zoom_range=0.2,
         horizontal_flip=True,
+        brightness_range=[0.8, 1.2],
         fill_mode='nearest'
     )
 
-    # For validation and test sets, only rescale. No augmentation should be applied.
     validation_test_datagen = ImageDataGenerator(rescale=1./255)
 
     try:
@@ -72,7 +68,6 @@ def main():
             class_mode='binary'
         )
 
-        # Load test data. Set shuffle=False for reproducible evaluation.
         test_generator = validation_test_datagen.flow_from_directory(
             test_dir,
             target_size=(IMG_HEIGHT, IMG_WIDTH),
@@ -92,78 +87,140 @@ def main():
         logger.error(f"Error loading data from directories. Please check DATA_DIR path and folder structure: {e}")
         raise
 
-    # --- Model Architecture (Transfer Learning with MobileNetV2) ---
-    # Transfer learning is used to leverage a pre-trained model (MobileNetV2)
-    # that has learned powerful features from a very large dataset (ImageNet).
-    # We "freeze" its layers and add our own classification layers on top.
+    # --- Handle Class Imbalance with Class Weighting ---
+    # This calculates weights to give more importance to the minority class (e.g., 'Pain').
+    # The 'balanced' mode automatically computes weights inversely proportional to class frequencies.
+    logger.info("Computing class weights to handle dataset imbalance...")
+    try:
+        class_weights_array = class_weight.compute_class_weight(
+            class_weight='balanced',
+            classes=np.unique(train_generator.classes),
+            y=train_generator.classes
+        )
+        class_weights_dict = dict(enumerate(class_weights_array))
+        logger.info(f"Computed Class Weights: {class_weights_dict}")
+    except Exception as e:
+        logger.error(f"Failed to compute class weights: {e}")
+        class_weights_dict = None # Proceed without class weights if calculation fails
 
+    # --- Model Architecture (Transfer Learning with MobileNetV2) ---
     logger.info("Building the model architecture using MobileNetV2 for transfer learning...")
 
-    # Load the MobileNetV2 model pre-trained on ImageNet, excluding its original top (classification) layer.
     base_model = MobileNetV2(
-        input_shape=(IMG_HEIGHT, IMG_WIDTH, 3), # Input shape matching our image dimensions
-        include_top=False, # We don't want the original ImageNet classification head
-        weights='imagenet' # Use weights trained on ImageNet
+        input_shape=(IMG_HEIGHT, IMG_WIDTH, 3),
+        include_top=False,
+        weights='imagenet'
     )
 
-    # Freeze the base model layers. This means their weights will not be updated during training.
-    # This is common in the initial phase of transfer learning to preserve learned features.
-    base_model.trainable = False
-    logger.info("Base model (MobileNetV2) layers frozen.")
+    base_model.trainable = False # Freeze layers for initial training
+    logger.info("Base model (MobileNetV2) layers frozen for initial training.")
 
-    # Add custom classification layers on top of the base model's output.
     x = base_model.output
-    x = GlobalAveragePooling2D()(x) # Reduces spatial dimensions to a single vector per feature map
-    x = Dense(128, activation='relu')(x) # A dense layer with ReLU activation
-    x = Dropout(0.5)(x) # Dropout layer for regularization to prevent overfitting
-    predictions = Dense(1, activation='sigmoid')(x) # Output layer for binary classification (sigmoid for probability)
+    x = GlobalAveragePooling2D()(x)
+    x = Dense(128, activation='relu')(x)
+    x = Dropout(0.5)(x)
+    predictions = Dense(1, activation='sigmoid')(x)
 
     model = Model(inputs=base_model.input, outputs=predictions)
 
     model.summary()
 
     # --- Model Compilation ---
-    # Compile the model with an optimizer, loss function, and metrics.
-    # Adam optimizer is a good general-purpose choice.
-    # Binary Crossentropy is suitable for binary classification with a sigmoid output.
-    logger.info("Compiling the model...")
+    logger.info("Compiling the model for initial training phase...")
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), # Small learning rate for initial training
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), # Small learning rate
         loss='binary_crossentropy',
         metrics=['accuracy']
     )
 
-    # --- Callbacks for Training ---
-    # Callbacks are functions that can be applied at certain stages of the training process.
-    # EarlyStopping: Stops training if validation loss does not improve for a certain number of epochs.
-    # ModelCheckpoint: Saves the best model weights based on validation accuracy.
-    logger.info("Setting up training callbacks (EarlyStopping, ModelCheckpoint)...")
-    callbacks = [
-        # Monitor validation loss and restore the best weights when training stops
+    # --- Callbacks for Initial Training ---
+    logger.info("Setting up callbacks for initial training (EarlyStopping, ModelCheckpoint, ReduceLROnPlateau)...")
+    initial_callbacks = [
+        # Stop training if validation loss doesn't improve for 5 epochs
         EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True, verbose=1),
-        # Save the model that achieves the highest validation accuracy
-        ModelCheckpoint('best_sheep_pain_model.h5', monitor='val_accuracy', save_best_only=True, mode='max', verbose=1)
+        # Save the best model based on validation accuracy during this phase
+        ModelCheckpoint('best_sheep_pain_model_stage1.h5', monitor='val_accuracy', save_best_only=True, mode='max', verbose=1),
+        # Reduce learning rate if validation loss plateaus for 3 epochs
+        ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-7, verbose=1)
     ]
 
-    # --- Model Training ---
-    logger.info(f"Starting model training for {EPOCHS} epochs...")
-    history = model.fit(
+    # --- Initial Model Training (Feature Extraction) ---
+    logger.info(f"Starting initial model training (feature extraction) for {EPOCHS} epochs...")
+    history_initial = model.fit(
         train_generator,
-        steps_per_epoch=train_generator.samples // BATCH_SIZE, # Number of batches per epoch
+        steps_per_epoch=train_generator.samples // BATCH_SIZE,
         epochs=EPOCHS,
         validation_data=validation_generator,
         validation_steps=validation_generator.samples // BATCH_SIZE,
-        callbacks=callbacks
+        class_weight=class_weights_dict,
+        callbacks=initial_callbacks
     )
-    logger.info("Model training finished.")
+    logger.info("Initial model training finished.")
+
+    # --- Fine-tuning Phase ---
+    # This is critical for adapting the pre-trained features to your specific dataset.
+    # Unfreeze some layers of the base model and train with a very low learning rate.
+    logger.info("Starting fine-tuning phase...")
+    # Load the best model from the previous stage to ensure we continue from the best point
+    model.load_weights('best_sheep_pain_model_stage1.h5')
+    logger.info("Loaded best weights from initial training for fine-tuning.")
+
+    # Unfreeze the base model
+    base_model.trainable = True
+    logger.info("Base model layers unfrozen for fine-tuning.")
+
+    # Re-compile the model with a much lower learning rate for fine-tuning
+    # This allows the base model's weights to be slightly adjusted without forgetting
+    # the general features it learned.
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.00001), # Very small learning rate for fine-tuning
+        loss='binary_crossentropy',
+        metrics=['accuracy']
+    )
+    logger.info("Model re-compiled for fine-tuning with a very low learning rate.")
+
+    # Callbacks for Fine-tuning
+    fine_tune_epochs = 20 # Additional epochs for fine-tuning
+    fine_tune_callbacks = [
+        # Stop training if validation loss doesn't improve for 7 epochs (slightly more patience)
+        EarlyStopping(monitor='val_loss', patience=7, restore_best_weights=True, verbose=1),
+        # Save the overall best model (including fine-tuned weights)
+        ModelCheckpoint('best_sheep_pain_model_final.h5', monitor='val_accuracy', save_best_only=True, mode='max', verbose=1),
+        # Reduce learning rate again if validation loss plateaus for 4 epochs
+        ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=4, min_lr=1e-8, verbose=1)
+    ]
+
+    logger.info(f"Starting fine-tuning for {fine_tune_epochs} additional epochs...")
+    history_fine_tune = model.fit(
+        train_generator,
+        steps_per_epoch=train_generator.samples // BATCH_SIZE,
+        epochs=EPOCHS + fine_tune_epochs, # Total epochs include previous and new
+        initial_epoch=history_initial.epoch[-1], # Start from where initial training left off
+        validation_data=validation_generator,
+        validation_steps=validation_generator.samples // BATCH_SIZE,
+        class_weight=class_weights_dict, # Continue applying class weights
+        callbacks=fine_tune_callbacks
+    )
+    logger.info("Fine-tuning finished.")
+
+    # Combine histories for plotting comprehensive curves
+    combined_history = {
+        'accuracy': history_initial.history['accuracy'] + history_fine_tune.history['accuracy'],
+        'val_accuracy': history_initial.history['val_accuracy'] + history_fine_tune.history['val_accuracy'],
+        'loss': history_initial.history['loss'] + history_fine_tune.history['loss'],
+        'val_loss': history_initial.history['val_loss'] + history_fine_tune.history['val_loss']
+    }
 
     # --- Evaluation and Reporting ---
     logger.info("Generating evaluation reports and plots...")
 
-    # Plot training history (accuracy and loss curves)
-    plot_training_history(history)
+    # Plot comprehensive training history (accuracy and loss curves)
+    plot_training_history(combined_history)
 
-    # Evaluate model on the unseen test set
+    # Evaluate model on the unseen test set (load the best overall weights first)
+    model.load_weights('best_sheep_pain_model_final.h5') # Ensure the best fine-tuned model is used
+    logger.info("Loaded final best weights for test set evaluation.")
+
     logger.info("Evaluating model on the test set...")
     test_loss, test_accuracy = model.evaluate(test_generator, verbose=1)
     logger.info(f"Test Loss: {test_loss:.4f}")
@@ -175,13 +232,9 @@ def main():
     num_test_steps = test_generator.samples // test_generator.batch_size + \
                      (test_generator.samples % test_generator.batch_size != 0)
 
-    # Get raw probabilities for ROC/PR curves
     Y_pred_probs = model.predict(test_generator, steps=num_test_steps)
-    # Convert probabilities to binary class labels using 0.5 threshold
     y_pred_classes = (Y_pred_probs > 0.5).astype(int).flatten()
 
-    # Get true labels directly from the generator after reset.
-    # Slicing is important because the last batch might be incomplete.
     y_true = test_generator.classes[test_generator.index_array][:len(y_pred_classes)]
 
     # Plot Confusion Matrix
@@ -200,14 +253,20 @@ def main():
     logger.info("Plotting Precision-Recall Curve...")
     plot_precision_recall_curve(y_true, Y_pred_probs.flatten(), class_names)
 
-    # --- Save the Final Trained Model ---
-    # Save the model in TensorFlow's SavedModel format, which is recommended for production deployment.
-    # This format saves the model's architecture, weights, and training configuration.
+    # --- Save the Final Trained Model in SavedModel format ---
     MODEL_SAVE_PATH = 'sheep_pain_detection_model'
-    model.export(MODEL_SAVE_PATH)
-    logger.info(f"\nFinal trained model saved to: {MODEL_SAVE_PATH}")
+    logger.info(f"Attempting to save final model to: {MODEL_SAVE_PATH} (SavedModel format)")
+    try:
+        model.export(MODEL_SAVE_PATH) # Use model.export() for SavedModel format
+        logger.info(f"Final trained model successfully saved to: {MODEL_SAVE_PATH}")
+    except Exception as e:
+        logger.error(f"ERROR: Failed to save final model to {MODEL_SAVE_PATH}. Reason: {e}")
+        logger.error("Please check file permissions, disk space, and TensorFlow compatibility.")
+        logger.error("You can still use 'best_sheep_pain_model_final.h5' for deployment if needed.")
+
 
     logger.info("Sheep Pain Detection Model Training script completed successfully.")
 
 if __name__ == '__main__':
     main()
+
