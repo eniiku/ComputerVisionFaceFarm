@@ -18,7 +18,7 @@ from src.config import (
     ALLOWED_ORIGINS,
     ALLOWED_METHODS,
     ALLOWED_HEADERS,
-    ALLOWED_CREDENTIALS,
+    ALLOW_CREDENTIALS,
 )
 from src.model_loader import load_inference_model, get_loaded_model
 
@@ -42,7 +42,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=ALLOWED_CREDENTIALS,
+    allow_credentials=ALLOW_CREDENTIALS,
     allow_methods=ALLOWED_METHODS,
     allow_headers=ALLOWED_HEADERS,
 )
