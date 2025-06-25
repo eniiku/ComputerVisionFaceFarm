@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 import logging
 
-from config import MODEL_PATH, IMG_HEIGHT, IMG_WIDTH
+from .config import MODEL_PATH, IMG_HEIGHT, IMG_WIDTH
 
 logger = logging.getLogger(__name__)
 
