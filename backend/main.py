@@ -8,7 +8,7 @@ import numpy as np
 import logging
 import uuid
 
-from config import (
+from src.config import (
     APP_TITLE,
     APP_DESCRIPTION,
     APP_VERSION,
@@ -20,9 +20,9 @@ from config import (
     ALLOWED_HEADERS,
     ALLOWED_CREDENTIALS,
 )
-from model_loader import load_inference_model, get_loaded_model
+from src.model_loader import load_inference_model, get_loaded_model
 
-from mongodb_service import (
+from src.mongodb_service import (
     initialize_mongodb,
     get_mongo_db,
     insert_record,
@@ -185,7 +185,7 @@ async def predict_pain(
             f"Prediction for {file.filename} (device: {x_device_id}): '{prediction_label}' (Prob: {pain_probability:.4f}, Conf: {confidence:.4f})"
         )
 
-        # 5. Store record in MongoDB
+        # 5. Store record in  MongoDB
         try:
             record_data = {
                 "filename": file.filename,
