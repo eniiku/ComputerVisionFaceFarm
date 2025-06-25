@@ -1,135 +1,269 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, File, UploadFile, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+import tensorflow as tf
 from PIL import Image
 import io
 import numpy as np
-import tensorflow as tf # Import TensorFlow
 import logging
-import os
+import uuid
 
-# --- Configuration ---
-MODEL_PATH = "ml/sheep_pain_detection_model"
-CLASS_NAMES = ["corpus_sheep_face_no_pain", "corpus_sheep_face_pain"]
-IMG_HEIGHT = 224 # Must match the input size your model was trained with
-IMG_WIDTH = 224  # Must match the input size your model was trained with
+from config import (
+    APP_TITLE,
+    APP_DESCRIPTION,
+    APP_VERSION,
+    CLASS_NAMES,
+    IMG_HEIGHT,
+    IMG_WIDTH,
+    ALLOWED_ORIGINS,
+    ALLOWED_METHODS,
+    ALLOWED_HEADERS,
+    ALLOWED_CREDENTIALS,
+)
+from model_loader import load_inference_model, get_loaded_model
 
-# --- Logging ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+from mongodb_service import (
+    initialize_mongodb,
+    get_mongo_db,
+    insert_record,
+    get_records_by_device_id,
+)
+
 logger = logging.getLogger(__name__)
-
-# --- Load Model ---
-inference_model_layer = None # Initialize to None
-try:
-    inference_model_layer = tf.keras.layers.TFSMLayer(MODEL_PATH, call_endpoint='serving_default')
-
-    # Run a dummy prediction to ensure the model layer is loaded correctly and is functional.
-    dummy_input = tf.constant(np.zeros((1, IMG_HEIGHT, IMG_WIDTH, 3), dtype=np.float32))
-    _ = inference_model_layer(dummy_input)
-    logger.info(f"Model layer loaded successfully from {MODEL_PATH} using TFSMLayer.")
-except Exception as e:
-    logger.error(f"FATAL ERROR: Could not load AI model layer from {MODEL_PATH}. Reason: {e}")
-    raise RuntimeError(f"Failed to load AI model layer. Please check MODEL_PATH and model files: {e}")
 
 # --- FastAPI Application Instance ---
 app = FastAPI(
-    title="Sheep Pain Detection API",
-    description="API for classifying sheep images as in pain or not in pain using a deep learning model.",
-    version="1.0.0",
+    title=APP_TITLE,
+    description=APP_DESCRIPTION,
+    version=APP_VERSION,
 )
 
-# CORS middleware
+# --- CORS Middleware ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  #NOTE: Configure this properly in production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=ALLOWED_CREDENTIALS,
+    allow_methods=ALLOWED_METHODS,
+    allow_headers=ALLOWED_HEADERS,
 )
+
+
+# --- FastAPI Startup Event: Initialize ML Model and MongoDB ---
+@app.on_event("startup")
+async def startup_event():
+    """
+    Initializes the ML model and MongoDB client when the FastAPI application starts.
+    """
+    logger.info("Application startup event triggered.")
+
+    # Initialize MongoDB first
+    try:
+        initialize_mongodb()
+        logger.info("MongoDB initialization complete.")
+    except Exception as e:
+        logger.critical(f"Failed to initialize MongoDB during startup: {e}")
+        # Depending on criticality, you might sys.exit(1) here for hard failure
+
+    # Then load the ML model
+    try:
+        load_inference_model()
+        logger.info("ML model loading complete.")
+    except Exception as e:
+        logger.critical(f"Failed to load ML model during startup: {e}")
+        # Depending on criticality, you might sys.exit(1) here for hard failure
+
+    logger.info("Application startup process completed.")
+
 
 # --- Health Check Endpoint ---
 @app.get("/health", summary="Health Check", response_model=dict)
 async def health_check():
     """
-    Checks the health of the API and ensures the model layer is loaded and responsive.
+    Checks the health of the API, ensures the ML model is loaded and responsive,
+    and verifies MongoDB connectivity.
     """
-    if inference_model_layer is None:
-        logger.warning("Health check: Model layer is not loaded (should not happen if startup was successful).")
-        return {"status": "error", "model_loaded": False, "detail": "Model layer not loaded"}
+    # Check ML Model
+    ml_model_ok = False
     try:
-        # Perform a quick dummy inference to verify model layer responsiveness
-        dummy_input = tf.constant(np.zeros((1, IMG_HEIGHT, IMG_WIDTH, 3), dtype=np.float32))
-        _ = inference_model_layer(dummy_input)
-        logger.info("Health check: Model layer responsive.")
-        return {"status": "ok", "model_loaded": True}
+        model_layer = get_loaded_model()
+        if model_layer is not None:
+            dummy_input = tf.constant(
+                np.zeros((1, IMG_HEIGHT, IMG_WIDTH, 3), dtype=np.float32)
+            )
+            _ = model_layer(dummy_input)
+            ml_model_ok = True
+            logger.info("Health check: ML model responsive.")
+        else:
+            logger.warning("Health check: ML model is not loaded.")
     except Exception as e:
-        logger.error(f"Health check failed due to model layer inference error: {e}")
-        return {"status": "error", "model_loaded": False, "detail": f"Model layer inference failed: {e}"}
+        logger.error(f"Health check failed due to ML model inference error: {e}")
+        ml_model_ok = False
+
+    # Check MongoDB
+    mongodb_ok = False
+    try:
+        db_client = get_mongo_db()
+        if db_client is not None:
+            # Attempt a minimal MongoDB operation (e.g., ping the server)
+            db_client.admin.command("ping")  # Blocks, but is a robust check
+            mongodb_ok = True
+            logger.info("Health check: MongoDB connected.")
+        else:
+            logger.warning("Health check: MongoDB client not initialized.")
+    except Exception as e:
+        logger.error(f"Health check failed due to MongoDB error: {e}")
+        mongodb_ok = False
+
+    status = "ok" if ml_model_ok and mongodb_ok else "error"
+    return {"status": status, "model_loaded": ml_model_ok, "mongodb_ok": mongodb_ok}
+
 
 # --- Prediction Endpoint ---
 @app.post("/predict", summary="Predict Sheep Pain", response_model=dict)
-async def predict_pain(file: UploadFile = File(...)):
+async def predict_pain(
+    file: UploadFile = File(...),
+    x_device_id: str = Header(
+        None,
+        alias="X-Device-ID",
+        description="Unique device identifier from the client. Generated if not provided.",
+    ),
+):
     """
-    Accepts an image file of a sheep, preprocesses it, and predicts
-    whether the sheep is in pain based on the trained deep learning model.
+    Accepts an image file of a sheep, preprocesses it, predicts
+    whether the sheep is in pain, and stores the record in MongoDB
+    associated with the provided device ID.
 
     - **file**: Upload a sheep image in JPG or PNG format.
+    - **X-Device-ID**: Optional. A unique identifier generated by the client device.
+                       If not provided, a UUID will be generated for the record.
     """
-    # 1. Validate input file type
+    if not x_device_id:
+        x_device_id = str(uuid.uuid4())  # Generate a UUID if client doesn't provide one
+        logger.info(f"No X-Device-ID provided. Generating new ID: {x_device_id}")
+
     if not file.content_type.startswith("image/"):
         logger.warning(f"Invalid file type uploaded: {file.content_type}")
-        raise HTTPException(status_code=400, detail="Invalid file type. Please upload an image (JPG, PNG).")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file type. Please upload an image (JPG, PNG).",
+        )
 
+    record_id = None
     try:
-        # 2. Read image content
+        # Get the loaded model (it should already be loaded at startup)
+        model_layer = get_loaded_model()
+        if model_layer is None:
+            logger.error("ML model not available for prediction.")
+            raise HTTPException(
+                status_code=500,
+                detail="ML model is not loaded. Please check backend logs.",
+            )
+
+        # 1. Read image content
         contents = await file.read()
-        image = Image.open(io.BytesIO(contents)).convert("RGB") # Ensure 3 channels for consistency
+        image = Image.open(io.BytesIO(contents)).convert("RGB")
 
-        # 3. Preprocess image for model input
-        # Resize the image to the dimensions expected by the model.
+        # 2. Preprocess image for model input
         image = image.resize((IMG_WIDTH, IMG_HEIGHT))
-        # Convert PIL image to NumPy array and normalize pixel values to [0, 1].
         image_array = np.array(image) / 255.0
-        # Add a batch dimension and convert to TensorFlow tensor
-        input_tensor = tf.constant(np.expand_dims(image_array, axis=0)) # Shape becomes (1, IMG_HEIGHT, IMG_WIDTH, 3)
+        input_tensor = tf.constant(
+            np.expand_dims(image_array, axis=0), dtype=tf.float32
+        )
 
-        # 4. Perform inference using the loaded model layer
-        logger.info(f"Performing inference for file: {file.filename}")
-        # Call the TFSMLayer directly with the input tensor
-        predictions = inference_model_layer(input_tensor)
+        # 3. Perform inference
+        logger.info(
+            f"Performing inference for file: {file.filename} for device: {x_device_id}"
+        )
+        predictions = model_layer(input_tensor)
+        pain_probability = float(predictions["output_0"].numpy()[0][0])
 
-        # 5. Interpret predictions
-        # The output of TFSMLayer might be a dictionary if the SavedModel has named outputs.
-        # For a simple classification model exported with model.export(), it often returns
-        # a single tensor, but it's safer to check the structure.
-        # Assuming the output is a single tensor representing probability.
-        # If it returns a dictionary like {'output_0': tensor}, you might need predictions['output_0'].numpy()[0][0]
-
-        print(predictions)
-        pain_probability = float(predictions['output_0'].numpy()[0][0]) # Extract value from TensorFlow tensor
-
-        # Classify based on a threshold (e.g., 0.5 probability)
-        if pain_probability >= 0.5:
-            prediction_label = CLASS_NAMES[1]
-        else:
-            prediction_label = CLASS_NAMES[0]
-
-        # Calculate a confidence score (the higher probability of the two classes)
+        # 4. Interpret predictions
+        prediction_label = CLASS_NAMES[1] if pain_probability >= 0.5 else CLASS_NAMES[0]
         confidence = max(pain_probability, 1 - pain_probability)
 
-        logger.info(f"Prediction for {file.filename}: '{prediction_label}' (Pain Probability: {pain_probability:.4f}, Confidence: {confidence:.4f})")
+        logger.info(
+            f"Prediction for {file.filename} (device: {x_device_id}): '{prediction_label}' (Prob: {pain_probability:.4f}, Conf: {confidence:.4f})"
+        )
+
+        # 5. Store record in MongoDB
+        try:
+            record_data = {
+                "filename": file.filename,
+                "prediction": prediction_label,
+                "pain_probability": pain_probability,
+                "confidence": confidence,
+                # 'device_id' added by insert_record function
+            }
+            record_id = await insert_record(x_device_id, record_data)
+            logger.info(
+                f"Record stored in MongoDB with ID: {record_id} for device: {x_device_id}"
+            )
+        except Exception as db_e:
+            logger.error(
+                f"Failed to store record in MongoDB for device {x_device_id}: {db_e}"
+            )
+            # Do not re-raise, allow prediction to be returned even if DB fails.
 
         # 6. Return structured JSON response
-        return JSONResponse(content={
+        response_content = {
             "filename": file.filename,
             "prediction": prediction_label,
             "pain_probability": pain_probability,
-            "confidence": confidence
-        })
+            "confidence": confidence,
+        }
+        if record_id:
+            response_content["record_id"] = record_id
 
+        return JSONResponse(content=response_content)
+
+    except HTTPException:
+        raise  # Re-raise HTTPExceptions (e.g., 400 Invalid file type)
     except Exception as e:
-        logger.exception(f"Error processing prediction for {file.filename}: {e}")
-        # Return a 500 Internal Server Error for unhandled exceptions during prediction
-        raise HTTPException(status_code=500, detail=f"An internal server error occurred during prediction: {e}")
+        logger.exception(
+            f"Error processing prediction for {file.filename} (device: {x_device_id}): {e}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"An internal server error occurred during prediction: {e}",
+        )
 
 
+# --- Endpoint: Get All Records for a Device ---
+@app.get(
+    "/records", summary="Get All Sheep Pain Records for a Device", response_model=dict
+)
+async def get_all_records(
+    x_device_id: str = Header(
+        ...,
+        alias="X-Device-ID",
+        description="Unique device identifier from the client.",
+    )
+):
+    """
+    Retrieves all stored sheep pain prediction records associated with the provided device ID.
+    """
+    if not x_device_id:
+        logger.warning("X-Device-ID header is missing for /records endpoint.")
+        raise HTTPException(status_code=400, detail="X-Device-ID header is required.")
+
+    records_list = []
+    try:
+        records_list = await get_records_by_device_id(x_device_id)
+        logger.info(
+            f"Retrieved {len(records_list)} records for device ID: {x_device_id}"
+        )
+        return JSONResponse(content={"records": records_list})
+
+    except ConnectionError:
+        raise HTTPException(
+            status_code=500,
+            detail="Database not initialized. Please check backend startup logs.",
+        )
+    except Exception as e:
+        logger.exception(
+            f"Error retrieving records from MongoDB for device {x_device_id}: {e}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"An internal server error occurred while retrieving records: {e}",
+        )
